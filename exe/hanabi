@@ -1,0 +1,4 @@
+#!/usr/bin/env ruby
+
+require 'hanabi/command'
+Hanabi::Command.start(ARGV)

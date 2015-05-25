@@ -2,7 +2,7 @@ module Hanabi
   class Client
     def initialize(options)
       Hanabi.setup(options)
-      @subs = {}
+      @subscriptions = {}
       @periodics = []
     end
 
@@ -10,45 +10,60 @@ module Hanabi
       host = Hanabi.config.host
       port = Hanabi.config.port
 
-      # puts "starting"
-      AMQP.start("amqp:://#{host}:#{port}") do |connection|
+      periodic(10) do
+        pub name: 'hanabi.host.heartbeat', host: inv.name, inventory: inv.to_h
+      end
 
-        # puts "started"
-        @channel = AMQP::Channel.new(connection)
-        @channel.on_error do |ch, channel_close|
-          raise "Channel-level exception: #{channel_close.reply_text}"
-        end
-        # puts "fanout"
-        @exchange = @channel.fanout('hanabi')
-        # puts "queue"
-        @channel.queue(inv.name, auto_delete: true).bind(@exchange).subscribe do |raw|
-          payload = Hanabi.parse(raw)
-          # puts "received: #{payload.inspect}"
-          puts "recieved: #{payload.name}"
-          if @subs[payload.name]
-            @subs[payload.name].call(payload)
+      begin
+        log.info "starting AMQP #{AMQP::VERSION} connection"
+        AMQP.start("amqp:://#{host}:#{port}") do |connection|
+          @channel = AMQP::Channel.new(connection)
+          @channel.on_error do |ch, channel_close|
+            raise "Channel-level exception: #{channel_close.reply_text}"
           end
-        end
+          @exchange = @channel.fanout('hanabi')
 
-        @periodics.each do |p|
-          EventMachine.add_periodic_timer(p[:timer]) do
-            b = p[:block]
-            instance_eval &b
+          log.debug 'connecting to queue'
+          @channel.queue("hanabi.host.#{inv.name}", auto_delete: true).bind(@exchange).subscribe do |raw|
+            payload = Hanabi.parse(raw)
+            log.debug "received: #{payload.name}"
+            if @subscriptions[payload.name]
+              @subscriptions[payload.name].call(payload)
+            end
           end
-        end
 
-        # puts "initialized"
-        Signal.trap("INT") { puts "stopping"; connection.close { EventMachine.stop } }
-        pub name: 'hanabi.joined', host: inv.name
+          @periodics.each do |p|
+            EventMachine.add_periodic_timer(p[:timer]) do
+              b = p[:block]
+              instance_eval &b
+            end
+          end
+
+          # puts "initialized"
+          pub name: 'hanabi.host.connected', host: inv.name
+          stopper = Proc.new do
+            puts 'stopping'
+            connection.close { EventMachine.stop }
+          end
+          Signal.trap("INT", stopper)
+          Signal.trap("TERM", stopper)
+        end
+      rescue => e
+        log.error e.message
+        log.debug e.backtrace
       end
     end
 
     def subscribe(name, &block)
-      @subs[name] = block
+      @subscriptions[name] = block
     end
 
     def periodic(timer, &block)
       @periodics << {timer: timer, block: block}
+    end
+
+    def log
+      Hanabi.log
     end
 
     def inv
@@ -64,7 +79,13 @@ module Hanabi
     end
 
     def pub(data)
-      @exchange.publish(msg(data))
+      if block_given?
+        @exchange.publish(msg(data)) do
+          yield
+        end
+      else
+        @exchange.publish(msg(data))
+      end
     end
   end
 end

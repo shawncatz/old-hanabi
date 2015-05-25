@@ -2,6 +2,7 @@ require 'hanabi/version'
 require 'hanabi/client'
 require 'hanabi/config'
 require 'hanabi/inventory'
+require 'hanabi/log'
 require 'hanabi/message'
 
 require 'amqp'
@@ -9,18 +10,28 @@ require 'amqp'
 module Hanabi
   class << self
     def setup(options)
-      config = options[:config]
-      inventory = options[:inventory]
-      Hanabi::Config.load(config)
-      Hanabi::Inventory.load(inventory)
+      config_file = options[:config]
+      inventory_file = options[:inventory]
+      Hanabi::Config.load(config_file)
+      Hanabi::Inventory.load(inventory_file)
+      @config = Hanabi::Config.instance
+      @inventory = Hanabi::Inventory.instance
+
+      @log = Hanabi::Log.new(:info, STDOUT)
+      @log.debug('setup complete')
+      @setup = true
+    end
+
+    def log
+      @log
     end
 
     def config
-      Hanabi::Config.instance
+      @config
     end
 
     def inventory
-      Hanabi::Inventory.instance
+      @inventory
     end
 
     def parse(data)
